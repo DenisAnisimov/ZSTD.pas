@@ -73,7 +73,15 @@ type
   int = Integer;
 
 function ZSTD_versionNumber: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_versionNumber;{$ENDIF}
-function ZSTD_versionString: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_versionString;{$ENDIF}// Not processed yet
+function ZSTD_versionString: PAnsiChar; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_versionString;{$ENDIF}
+
+(***************************************
+*  Default constant
+***************************************)
+
+const
+  ZSTD_CLEVEL_DEFAULT = 3;
+
 
 (***************************************
 *  Simple API
@@ -94,11 +102,11 @@ function ZSTD_compress(dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize:
  *            or an errorCode if it fails (which can be tested using ZSTD_isError()). *)
 function ZSTD_decompress(dst: Pointer; dstCapacity: size_t; src: Pointer; compressedSize: size_t): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompress;{$ENDIF}
 
-(*! ZSTD_getFrameContentSize() : added in v1.3.0
+(*! ZSTD_getFrameContentSize() : requires v1.3.0+
  *  `src` should point to the start of a ZSTD encoded frame.
  *  `srcSize` must be at least as large as the frame header.
  *            hint : any size >= `ZSTD_frameHeaderSize_max` is large enough.
- *  @return : - decompressed size of the frame in `src`, if known
+ *  @return : - decompressed size of `src` frame content, if known
  *            - ZSTD_CONTENTSIZE_UNKNOWN if the size cannot be determined
  *            - ZSTD_CONTENTSIZE_ERROR if an error occurred (e.g. invalid magic number, srcSize too small)
  *   note 1 : a 0 return value means the frame is valid but "empty".
@@ -108,7 +116,8 @@ function ZSTD_decompress(dst: Pointer; dstCapacity: size_t; src: Pointer; compre
  *            Optionally, application can rely on some implicit limit,
  *            as ZSTD_decompress() only needs an upper bound of decompressed size.
  *            (For example, data could be necessarily cut into blocks <= 16 KB).
- *   note 3 : decompressed size is always present when compression is done with ZSTD_compress()
+ *   note 3 : decompressed size is always present when compression is completed using single-pass functions,
+ *            such as ZSTD_compress(), ZSTD_compressCCtx() ZSTD_compress_usingDict() or ZSTD_compress_usingCDict().
  *   note 4 : decompressed size can be very large (64-bits value),
  *            potentially larger than what local system can handle as a single memory segment.
  *            In which case, it's necessary to use streaming mode to decompress data.
@@ -116,20 +125,20 @@ function ZSTD_decompress(dst: Pointer; dstCapacity: size_t; src: Pointer; compre
  *            Always ensure return value fits within application's authorized limits.
  *            Each application can set its own limits.
  *   note 6 : This function replaces ZSTD_getDecompressedSize() *)
+
 const
   ZSTD_CONTENTSIZE_UNKNOWN = -1;
   ZSTD_CONTENTSIZE_ERROR   = -2;
 
-function ZSTD_getFrameContentSize: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_getFrameContentSize;{$ENDIF} // Not processed yet
+function ZSTD_getFrameContentSize(src: Pointer; srcSize: size_t): Int64; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_getFrameContentSize;{$ENDIF}
 
 (*! ZSTD_getDecompressedSize() :
  *  NOTE: This function is now obsolete, in favor of ZSTD_getFrameContentSize().
  *  Both functions work the same way, but ZSTD_getDecompressedSize() blends
  *  "empty", "unknown" and "error" results to the same return value (0),
  *  while ZSTD_getFrameContentSize() gives them separate return values.
- * `src` is the start of a zstd compressed frame.
- * @return : content size to be decompressed, as a 64-bits value _if known and not empty_, 0 otherwise. *)
-function ZSTD_getDecompressedSize: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_getDecompressedSize;{$ENDIF}// Not processed yet
+ * @return : decompressed size of `src` frame content _if known and not empty_, 0 otherwise. *)
+function ZSTD_getDecompressedSize(src: Pointer; srcSize: size_t): Int64; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_getDecompressedSize;{$ENDIF}
 
 (*======  Helper functions  ======*)
 
@@ -154,7 +163,10 @@ type
 function ZSTD_createCCtx: ZSTD_CCtx; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createCCtx;{$ENDIF}
 function ZSTD_freeCCtx(cctx: ZSTD_CCtx): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeCCtx;{$ENDIF}
 
-(*  Same as ZSTD_compress(), requires an allocated ZSTD_CCtx (see ZSTD_createCCtx()). *)
+(*! ZSTD_compressCCtx() :
+ *  Same as ZSTD_compress(), using an explicit ZSTD_CCtx
+ *  The function will compress at requested compression level,
+ *  ignoring any other parameter *)
 function ZSTD_compressCCtx(ctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; compressionLevel: int): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_compressCCtx;{$ENDIF}
 
 (*= Decompression context
@@ -167,60 +179,80 @@ function ZSTD_compressCCtx(ctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; sr
 type
   ZSTD_DCtx = type Pointer;
 
-function ZSTD_createDCtx: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createDCtx;{$ENDIF} // Not processed yet
-function ZSTD_freeDCtx: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeDCtx;{$ENDIF} // Not processed yet
+function ZSTD_createDCtx: ZSTD_DCtx; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createDCtx;{$ENDIF}
+function ZSTD_freeDCtx(dctx: ZSTD_DCtx): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeDCtx;{$ENDIF}
 
-(*  Same as ZSTD_decompress(), requires an allocated ZSTD_DCtx (see ZSTD_createDCtx()) *)
-function ZSTD_decompressDCtx: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompressDCtx;{$ENDIF} // Not processed yet
+(*! ZSTD_decompressDCtx() :
+ *  Same as ZSTD_decompress(),
+ *  requires an allocated ZSTD_DCtx.
+ *  Compatible with sticky parameters.
+ *)
+function ZSTD_decompressDCtx(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompressDCtx;{$ENDIF}
 
 (**************************
 *  Simple dictionary API
 ***************************)
 
-(*  Compression using a predefined Dictionary (see dictBuilder/zdict.h).
+(*! ZSTD_compress_usingDict() :
+ *  Compression at an explicit compression level using a Dictionary.
+ *  A dictionary can be any arbitrary data segment (also called a prefix),
+ *  or a buffer with specified information (see dictBuilder/zdict.h).
  *  Note : This function loads the dictionary, resulting in significant startup delay.
- *  Note : When `dict == NULL || dictSize < 8` no dictionary is used. *)
-function ZSTD_compress_usingDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_compress_usingDict;{$ENDIF} // Not processed yet
+ *         It's intended for a dictionary used only once.
+ *  Note 2 : When `dict == NULL || dictSize < 8` no dictionary is used. *)
+function ZSTD_compress_usingDict(ctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; dict: Pointer; dictSize: size_t; compressionLevel: int): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_compress_usingDict;{$ENDIF}
 
-(*  Decompression using a predefined Dictionary (see dictBuilder/zdict.h).
+(*! ZSTD_decompress_usingDict() :
+ *  Decompression using a known Dictionary.
  *  Dictionary must be identical to the one used during compression.
  *  Note : This function loads the dictionary, resulting in significant startup delay.
+ *         It's intended for a dictionary used only once.
  *  Note : When `dict == NULL || dictSize < 8` no dictionary is used. *)
-function ZSTD_decompress_usingDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompress_usingDict;{$ENDIF} // Not processed yet
+function ZSTD_decompress_usingDict(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; dict: Pointer; dictSize: size_t): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompress_usingDict;{$ENDIF}
 
 (**********************************
  *  Bulk processing dictionary API
  *********************************)
 
- //typedef struct ZSTD_CDict_s ZSTD_CDict;
+type
+  ZSTD_CDict = type Pointer;
 
-(*  When compressing multiple messages / blocks with the same dictionary, it's recommended to load it just once.
- *  ZSTD_createCDict() will create a digested dictionary, ready to start future compression operations without startup delay.
+(*! ZSTD_createCDict() :
+ *  When compressing multiple messages / blocks using the same dictionary, it's recommended to load it only once.
+ *  ZSTD_createCDict() will create a digested dictionary, ready to start future compression operations without startup cost.
  *  ZSTD_CDict can be created once and shared by multiple threads concurrently, since its usage is read-only.
- *  `dictBuffer` can be released after ZSTD_CDict creation, since its content is copied within CDict *)
-function ZSTD_createCDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createCDict;{$ENDIF} // Not processed yet
+ * `dictBuffer` can be released after ZSTD_CDict creation, because its content is copied within CDict.
+ *  Consider experimental function `ZSTD_createCDict_byReference()` if you prefer to not duplicate `dictBuffer` content.
+ *  Note : A ZSTD_CDict can be created from an empty dictBuffer, but it is inefficient when used to compress small data. *)
+function ZSTD_createCDict(dictBuffer: Pointer; dictSize: size_t; compressionLevel: int): ZSTD_CDict; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createCDict;{$ENDIF}
 
-(*  Function frees memory allocated by ZSTD_createCDict(). *)
-function ZSTD_freeCDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeCDict;{$ENDIF} // Not processed yet
+(*! ZSTD_freeCDict() :
+ *  Function frees memory allocated by ZSTD_createCDict(). *)
+function ZSTD_freeCDict(CDict: ZSTD_CDict): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeCDict;{$ENDIF}
 
-(*  Compression using a digested Dictionary.
- *  Faster startup than ZSTD_compress_usingDict(), recommended when same dictionary is used multiple times.
- *  Note that compression level is decided during dictionary creation.
- *  Frame parameters are hardcoded (dictID=yes, contentSize=yes, checksum=no) *)
-function ZSTD_compress_usingCDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_compress_usingCDict;{$ENDIF} // Not processed yet
+(*! ZSTD_compress_usingCDict() :
+ *  Compression using a digested Dictionary.
+ *  Recommended when same dictionary is used multiple times.
+ *  Note : compression level is _decided at dictionary creation time_,
+ *     and frame parameters are hardcoded (dictID=yes, contentSize=yes, checksum=no) *)
+function ZSTD_compress_usingCDict(cctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; cdict: ZSTD_CDict): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_compress_usingCDict;{$ENDIF}
 
-//typedef struct ZSTD_DDict_s ZSTD_DDict;
+type
+  ZSTD_DDict = type Pointer;
 
-(*  Create a digested dictionary, ready to start decompression operation without startup delay.
- *  dictBuffer can be released after DDict creation, as its content is copied inside DDict *)
-function ZSTD_createDDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createDDict;{$ENDIF} // Not processed yet
+(*! ZSTD_createDDict() :
+ *  Create a digested dictionary, ready to start decompression operation without startup delay.
+ *  dictBuffer can be released after DDict creation, as its content is copied inside DDict. *)
+function ZSTD_createDDict(dictBuffer: Pointer; dictSize: size_t): ZSTD_DDict; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_createDDict;{$ENDIF}
 
-(*  Function frees memory allocated with ZSTD_createDDict() *)
-function ZSTD_freeDDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeDDict;{$ENDIF} // Not processed yet
+(*! ZSTD_freeDDict() :
+ *  Function frees memory allocated with ZSTD_createDDict() *)
+function ZSTD_freeDDict(ddict: ZSTD_DDict): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_freeDDict;{$ENDIF}
 
-(*  Decompression using a digested Dictionary.
- *  Faster startup than ZSTD_decompress_usingDict(), recommended when same dictionary is used multiple times. *)
-function ZSTD_decompress_usingDDict: unsigned; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompress_usingDDict;{$ENDIF} // Not processed yet
+(*! ZSTD_decompress_usingDDict() :
+ *  Decompression using a digested Dictionary.
+ *  Recommended when same dictionary is used multiple times. *)
+function ZSTD_decompress_usingDDict(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; ddict: ZSTD_DDict): size_t; {$IFDEF STATIC_LINKING}cdecl; external ZSTDDllName name sZSTD_decompress_usingDDict;{$ENDIF}
 
 (****************************
 *  Streaming
@@ -245,37 +277,45 @@ type
 *  A ZSTD_CStream object is required to track streaming operation.
 *  Use ZSTD_createCStream() and ZSTD_freeCStream() to create/release resources.
 *  ZSTD_CStream objects can be reused multiple times on consecutive compression operations.
-*  It is recommended to re-use ZSTD_CStream in situations where many streaming operations will be achieved consecutively,
-*  since it will play nicer with system's memory, by re-using already allocated memory.
-*  Use one separate ZSTD_CStream per thread for parallel execution.
+*  It is recommended to re-use ZSTD_CStream since it will play nicer with system's memory, by re-using already allocated memory.
 *
-*  Start a new compression by initializing ZSTD_CStream.
-*  Use ZSTD_initCStream() to start a new compression operation.
-*  Use ZSTD_initCStream_usingDict() or ZSTD_initCStream_usingCDict() for a compression which requires a dictionary (experimental section)
+*  For parallel execution, use one separate ZSTD_CStream per thread.
 *
-*  Use ZSTD_compressStream() repetitively to consume input stream.
-*  The function will automatically update both `pos` fields.
-*  Note that it may not consume the entire input, in which case `pos < size`,
-*  and it's up to the caller to present again remaining data.
-*  @return : a size hint, preferred nb of bytes to use as input for next function call
-*            or an error code, which can be tested using ZSTD_isError().
-*            Note 1 : it's just a hint, to help latency a little, any other value will work fine.
-*            Note 2 : size hint is guaranteed to be <= ZSTD_CStreamInSize()
+*  note : since v1.3.0, ZSTD_CStream and ZSTD_CCtx are the same thing.
 *
-*  At any moment, it's possible to flush whatever data remains within internal buffer, using ZSTD_flushStream().
-*  `output->pos` will be updated.
-*  Note that some content might still be left within internal buffer if `output->size` is too small.
-*  @return : nb of bytes still present within internal buffer (0 if it's empty)
+*  Parameters are sticky : when starting a new compression on the same context,
+*  it will re-use the same sticky parameters as previous compression session.
+*  When in doubt, it's recommended to fully initialize the context before usage.
+*  Use ZSTD_initCStream() to set the parameter to a selected compression level.
+*  Use advanced API (ZSTD_CCtx_setParameter(), etc.) to set more specific parameters.
+*
+*  Use ZSTD_compressStream() as many times as necessary to consume input stream.
+*  The function will automatically update both `pos` fields within `input` and `output`.
+*  Note that the function may not consume the entire input,
+*  for example, because the output buffer is already full,
+*  in which case `input.pos < input.size`.
+*  The caller must check if input has been entirely consumed.
+*  If not, the caller must make some room to receive more compressed data,
+*  and then present again remaining input data.
+* @return : a size hint, preferred nb of bytes to use as input for next function call
+*           or an error code, which can be tested using ZSTD_isError().
+*           Note 1 : it's just a hint, to help latency a little, any value will work fine.
+*           Note 2 : size hint is guaranteed to be <= ZSTD_CStreamInSize()
+*
+*  At any moment, it's possible to flush whatever data might remain stuck within internal buffer,
+*  using ZSTD_flushStream(). `output->pos` will be updated.
+*  Note that, if `output->size` is too small, a single invocation of ZSTD_flushStream() might not be enough (return code > 0).
+*  In which case, make some room to receive more compressed data, and call again ZSTD_flushStream().
+*  @return : 0 if internal buffers are entirely flushed,
+*            >0 if some data still present within internal buffer (the value is minimal estimation of remaining size),
 *            or an error code, which can be tested using ZSTD_isError().
 *
 *  ZSTD_endStream() instructs to finish a frame.
 *  It will perform a flush and write frame epilogue.
 *  The epilogue is required for decoders to consider a frame completed.
-*  ZSTD_endStream() may not be able to flush full data if `output->size` is too small.
-*  In which case, call again ZSTD_endStream() to complete the flush.
+*  flush() operation is the same, and follows same rules as ZSTD_flushStream().
 *  @return : 0 if frame fully completed and fully flushed,
-             or >0 if some data is still present within internal buffer
-                  (value is minimum size estimation for remaining data to flush, but it could be more)
+*            >0 if some data still present within internal buffer (the value is minimal estimation of remaining size),
 *            or an error code, which can be tested using ZSTD_isError().
 *
 * *******************************************************************)
@@ -303,19 +343,24 @@ function ZSTD_CStreamOutSize: size_t; {$IFDEF STATIC_LINKING}cdecl; external ZST
 *  Use ZSTD_createDStream() and ZSTD_freeDStream() to create/release resources.
 *  ZSTD_DStream objects can be re-used multiple times.
 *
-*  Use ZSTD_initDStream() to start a new decompression operation,
-*   or ZSTD_initDStream_usingDict() if decompression requires a dictionary.
-*   @return : recommended first input size
+*  Use ZSTD_initDStream() to start a new decompression operation.
+* @return : recommended first input size
+*  Alternatively, use advanced API to set specific properties.
 *
 *  Use ZSTD_decompressStream() repetitively to consume your input.
 *  The function will update both `pos` fields.
 *  If `input.pos < input.size`, some input has not been consumed.
 *  It's up to the caller to present again remaining data.
+*  The function tries to flush all data decoded immediately, respecting output buffer size.
 *  If `output.pos < output.size`, decoder has flushed everything it could.
-*  @return : 0 when a frame is completely decoded and fully flushed,
-*            an error code, which can be tested using ZSTD_isError(),
-*            any other value > 0, which means there is still some decoding to do to complete current frame.
-*            The return value is a suggested next input size (a hint to improve latency) that will never load more than the current frame.
+*  But if `output.pos == output.size`, there might be some data left within internal buffers.,
+*  In which case, call ZSTD_decompressStream() again to flush whatever remains in the buffer.
+*  Note : with no additional input provided, amount of data flushed is necessarily <= ZSTD_BLOCKSIZE_MAX.
+* @return : 0 when a frame is completely decoded and fully flushed,
+*        or an error code, which can be tested using ZSTD_isError(),
+*        or any other value > 0, which means there is still some decoding or flushing to do to complete current frame :
+*                                the return value is a suggested next input size (just a hint for better latency)
+*                                that will never request more than the remaining frame size.
 * *******************************************************************************)
 
 type
@@ -357,6 +402,7 @@ const
   ZSTD_error_workSpace_tooSmall            = 66;
   ZSTD_error_dstSize_tooSmall              = 70;
   ZSTD_error_srcSize_wrong                 = 72;
+  ZSTD_error_dstBuffer_null                = 74;
 
 function GetExceptionMessage(const AFunctionName: string; ACode: ssize_t): string;
 begin
@@ -389,11 +435,11 @@ end;
 {$IFNDEF STATIC_LINKING}
 type
   TZSTD_versionNumber = function: unsigned; cdecl;
-  TZSTD_versionString = function: unsigned; cdecl; // Not processed yet
+  TZSTD_versionString = function: PAnsiChar; cdecl;
   TZSTD_compress = function(dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; compressionLevel: int): size_t; cdecl;
   TZSTD_decompress = function(dst: Pointer; dstCapacity: size_t; src: Pointer; compressedSize: size_t): size_t; cdecl;
-  TZSTD_getFrameContentSize = function: unsigned; cdecl; // Not processed yet
-  TZSTD_getDecompressedSize = function: unsigned; cdecl; // Not processed yet
+  TZSTD_getFrameContentSize = function(src: Pointer; srcSize: size_t): Int64; cdecl;
+  TZSTD_getDecompressedSize = function(src: Pointer; srcSize: size_t): Int64; cdecl;
   TZSTD_compressBound = function(srcSize: size_t): size_t; cdecl;
   TZSTD_isError = function(code: size_t): unsigned; cdecl;
   TZSTD_getErrorName = function(code: size_t): PAnsiChar; cdecl;
@@ -401,17 +447,17 @@ type
   TZSTD_createCCtx = function: ZSTD_CCtx; cdecl;
   TZSTD_freeCCtx = function(cctx: ZSTD_CCtx): size_t; cdecl;
   TZSTD_compressCCtx = function(ctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; compressionLevel: int): size_t; cdecl;
-  TZSTD_createDCtx = function: unsigned; cdecl; // Not processed yet
-  TZSTD_freeDCtx = function: unsigned; cdecl; // Not processed yet
-  TZSTD_decompressDCtx = function: unsigned; cdecl; // Not processed yet
-  TZSTD_compress_usingDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_decompress_usingDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_createCDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_freeCDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_compress_usingCDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_createDDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_freeDDict = function: unsigned; cdecl; // Not processed yet
-  TZSTD_decompress_usingDDict = function: unsigned; cdecl; // Not processed yet
+  TZSTD_createDCtx = function: ZSTD_DCtx; cdecl;
+  TZSTD_freeDCtx = function(dctx: ZSTD_DCtx): size_t; cdecl;
+  TZSTD_decompressDCtx = function(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t): size_t; cdecl;
+  TZSTD_compress_usingDict = function(ctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; dict: Pointer; dictSize: size_t; compressionLevel: int): size_t; cdecl;
+  TZSTD_decompress_usingDict = function(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; dict: Pointer; dictSize: size_t): size_t; cdecl;
+  TZSTD_createCDict = function(dictBuffer: Pointer; dictSize: size_t; compressionLevel: int): ZSTD_CDict; cdecl;
+  TZSTD_freeCDict = function(CDict: ZSTD_CDict): size_t; cdecl;
+  TZSTD_compress_usingCDict = function(cctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; cdict: ZSTD_CDict): size_t; cdecl;
+  TZSTD_createDDict = function(dictBuffer: Pointer; dictSize: size_t): ZSTD_DDict; cdecl;
+  TZSTD_freeDDict = function(ddict: ZSTD_DDict): size_t; cdecl;
+  TZSTD_decompress_usingDDict = function(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; ddict: ZSTD_DDict): size_t; cdecl;
   TZSTD_createCStream = function: ZSTD_CStream; cdecl;
   TZSTD_freeCStream = function(zcs: ZSTD_CStream): size_t; cdecl;
   TZSTD_initCStream = function(zcs: ZSTD_CStream; compressionLevel: int): size_t; cdecl;
@@ -535,13 +581,13 @@ begin
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_versionString: unsigned; // Not processed yet
+function ZSTD_versionString: PAnsiChar;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_versionString) then
     Result := _ZSTD_versionString
   else
-    begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
+    begin Result := nil; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
 function ZSTD_compress(dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; compressionLevel: int): size_t;
@@ -562,20 +608,20 @@ begin
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_getFrameContentSize: unsigned; // Not processed yet
+function ZSTD_getFrameContentSize(src: Pointer; srcSize: size_t): Int64;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_getFrameContentSize) then
-    Result := _ZSTD_getFrameContentSize
+    Result := _ZSTD_getFrameContentSize(src, srcSize)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_getDecompressedSize: unsigned; // Not processed yet
+function ZSTD_getDecompressedSize(src: Pointer; srcSize: size_t): Int64;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_getDecompressedSize) then
-    Result := _ZSTD_getDecompressedSize
+    Result := _ZSTD_getDecompressedSize(src, srcSize)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
@@ -643,101 +689,101 @@ begin
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_createDCtx: unsigned; // Not processed yet
+function ZSTD_createDCtx: ZSTD_DCtx;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_createDCtx) then
     Result := _ZSTD_createDCtx
   else
-    begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
+    begin Result := nil; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_freeDCtx: unsigned; // Not processed yet
+function ZSTD_freeDCtx(dctx: ZSTD_DCtx): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_freeDCtx) then
-    Result := _ZSTD_freeDCtx
+    Result := _ZSTD_freeDCtx(dctx)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_decompressDCtx: unsigned; // Not processed yet
+function ZSTD_decompressDCtx(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_decompressDCtx) then
-    Result := _ZSTD_decompressDCtx
+    Result := _ZSTD_decompressDCtx(dctx, dst, dstCapacity, src, srcSize)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_compress_usingDict: unsigned; // Not processed yet
+function ZSTD_compress_usingDict(ctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; dict: Pointer; dictSize: size_t; compressionLevel: int): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_compress_usingDict) then
-    Result := _ZSTD_compress_usingDict
+    Result := _ZSTD_compress_usingDict(ctx, dst, dstCapacity, src, srcSize, dict, dictSize, compressionLevel)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_decompress_usingDict: unsigned; // Not processed yet
+function ZSTD_decompress_usingDict(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; dict: Pointer; dictSize: size_t): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_decompress_usingDict) then
-    Result := _ZSTD_decompress_usingDict
+    Result := _ZSTD_decompress_usingDict(dctx, dst, dstCapacity, src, srcSize, dict, dictSize)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_createCDict: unsigned; // Not processed yet
+function ZSTD_createCDict(dictBuffer: Pointer; dictSize: size_t; compressionLevel: int): ZSTD_CDict;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_createCDict) then
-    Result := _ZSTD_createCDict
+    Result := _ZSTD_createCDict(dictBuffer, dictSize, compressionLevel)
   else
-    begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
+    begin Result := nil; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_freeCDict: unsigned; // Not processed yet
+function ZSTD_freeCDict(CDict: ZSTD_CDict): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_freeCDict) then
-    Result := _ZSTD_freeCDict
+    Result := _ZSTD_freeCDict(CDict)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_compress_usingCDict: unsigned; // Not processed yet
+function ZSTD_compress_usingCDict(cctx: ZSTD_CCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; cdict: ZSTD_CDict): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_compress_usingCDict) then
-    Result := _ZSTD_compress_usingCDict
+    Result := _ZSTD_compress_usingCDict(cctx, dst, dstCapacity, src, srcSize, cdict)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_createDDict: unsigned; // Not processed yet
+function ZSTD_createDDict(dictBuffer: Pointer; dictSize: size_t): ZSTD_DDict;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_createDDict) then
-    Result := _ZSTD_createDDict
+    Result := _ZSTD_createDDict(dictBuffer, dictSize)
   else
-    begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
+    begin Result := nil; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_freeDDict: unsigned; // Not processed yet
+function ZSTD_freeDDict(ddict: ZSTD_DDict): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_freeDDict) then
-    Result := _ZSTD_freeDDict
+    Result := _ZSTD_freeDDict(ddict)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_decompress_usingDDict: unsigned; // Not processed yet
+function ZSTD_decompress_usingDDict(dctx: ZSTD_DCtx; dst: Pointer; dstCapacity: size_t; src: Pointer; srcSize: size_t; ddict: ZSTD_DDict): size_t;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_decompress_usingDDict) then
-    Result := _ZSTD_decompress_usingDDict
+    Result := _ZSTD_decompress_usingDDict(dctx, dst, dstCapacity, src, srcSize, ddict)
   else
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
@@ -814,7 +860,7 @@ begin
     begin Result := 0; RaiseLastOSError(ERROR_PROC_NOT_FOUND); end;
 end;
 
-function ZSTD_createDStream: ZSTD_DStream; // Not processed yet
+function ZSTD_createDStream: ZSTD_DStream;
 begin
   InitZSTD;
   if Assigned(@_ZSTD_createDStream) then
