@@ -144,23 +144,22 @@ begin
   inherited Create;
   FDest := ADest;
   FLevel := ALevel;
+  if FLevel < 1 then FLevel := 1;
+  if FLevel > MaxLevel then FLevel := MaxLevel;
 end;
 
 destructor TZSTDCompressStream.Destroy;
 var
   Output: ZSTD_outBuffer;
-  //R: SIZE_T;
 begin
   if Assigned(FStream) then
     begin
       Output.dst := FStreamOutBuffer;
       Output.size := FStreamOutBufferSize;
       Output.pos := 0;
-      {R := }ZSTDCheck(sZSTD_endStream, ZSTD_endStream(FStream, Output));
+      ZSTDCheck(sZSTD_endStream, ZSTD_endStream(FStream, Output));
       if Output.pos > 0 then
         FDest.WriteBuffer(FStreamOutBuffer^, Output.pos);
-      {if R <> 0 then
-        OleError(E_FAIL);}
       ZSTD_freeCStream(FStream);
     end;
   if Assigned(FStreamOutBuffer) then
