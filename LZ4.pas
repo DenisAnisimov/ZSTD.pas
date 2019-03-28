@@ -59,8 +59,6 @@ const
   CopyBufferSize = 65536;
 
 procedure LZ4CompressStream(ASource, ADest: TStream; ALevel: Integer; ACount: Int64 = 0);
-const
-  CopyBufferSize = 6553;
 var
   Buffer: Pointer;
   CompressStream: TStream;
@@ -99,8 +97,6 @@ begin
 end;
 
 procedure LZ4DecompressStream(ASource, ADest: TStream; ACount: Int64 = 0);
-const
-  CopyBufferSize = 6553;
 var
   Buffer: Pointer;
   DecompressStream: TStream;
@@ -162,7 +158,7 @@ begin
   if FLevel < 0 then FLevel := 0;
   if FLevel > MaxLevel then FLevel := MaxLevel;
 
-	FPreferences.compressionLevel := FLevel;
+  Preferences.compressionLevel := FLevel;
 
   if (ABlockSize = 0) or (ABlockSize > LZ4DefaultBlockSize1MB) then
     FPreferences.frameInfo.blockSizeID := LZ4F_max4MB
